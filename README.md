@@ -1,27 +1,27 @@
-News
+新闻
 ==================================================
 
-We finally have normal homepage:
-- https://myvestacp.com/
+我们终于有了正常的主页：
+- https://www.myvestacp.org/
 
-Forum:
-- https://forum.myvestacp.com/
+论坛：
+- https://forum.myvestacp.org/
 
-Knowledge base:
-- https://wiki.myvestacp.com/
+知识库：
+- https://wiki.myvestacp.org/
 
-Changelog:
-- https://github.com/myvesta/vesta/blob/master/Changelog.md
+更新日志：
+- https://github.com/myvestacp/vesta/blob/master/Changelog.md
 
-myVesta Control Panel
+myVesta控制面板
 ==================================================
 
-* myVesta is a fork of [VestaCP](https://vestacp.com/)
-* Focused on security and stability
-* Therefore, only Debian is supported - keeping focus on only one eco-system - not wasting energy on compatibility with other Linux distributions
-* However, it will be always synchronized with official VestaCP commits
-* VestaCP commercial plugins will be only available for purchase on official [vestacp.com](https://vestacp.com/) website - we will NOT take their earnings, since we are not making this fork for monetary reasons. Instead, we are doing this with open source in mind - to enhance security and to build new features, without being interlocked with official VestaCP release cycles, and without affecting or heavily diverting from the VestaCP's planned development milestones
-* With previous in mind, all features that are built for this fork (myVesta), will be offered to official VestaCP, via pull requests
+* myVesta是[VestaCP](https://vestacp.com/)的一个分叉
+* 专注于安全性和稳定性
+* 因此，仅支持Debian-仅关注一个生态系统-不浪费精力与其他Linux发行版兼容
+* 但是，它将始终与官方VestaCP提交同步
+* VestaCP商业插件仅可在[vestacp.com](https://vestacp.com/)官方网站上购买-我们不会收取他们的收入，因为出于金钱原因我们不作此准备。取而代之的是，我们会在考虑开源的情况下进行此操作-增强安全性并构建新功能，而不会与VestaCP的正式发布周期挂钩，也不会影响或严重偏离VestaCP的计划开发里程碑
+* 牢记先前的观点，为此分叉（myVesta）构建的所有功能将通过拉取请求提供给官方VestaCP。
 
 Features of myVesta
 ==================================================
