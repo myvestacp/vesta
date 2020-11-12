@@ -1,0 +1,188 @@
+#!/bin/bash
+# info: migrate site to https
+# options: DOMAIN [--DATABASE_NAME=...] [--DATABASE_USERNAME=...] [--DATABASE_PASSWORD=...]
+#
+# Tool that will replace http to https URLs in database, install SSL and switch to force-https proxy template
+# Automatic detection of CMS, automaticaly read DB user, DB name and DB pass.
+
+#----------------------------------------------------------#
+#                    Variable&Function                     #
+#----------------------------------------------------------#
+
+whoami=$(whoami)
+if [ "$whoami" != "root" ]; then
+    echo "You must be root to execute this script"
+    exit 1
+fi
+
+# Argument definition
+domain=$1
+
+user=$(/usr/local/vesta/bin/v-search-domain-owner $domain)
+if [ -z "$user" ]; then
+    echo "domain $domain doesn't exist"
+    exit 1
+fi
+
+# Importing system environment
+source /etc/profile
+
+# Includes
+source /usr/local/vesta/func/main.sh
+source /usr/local/vesta/func/db.sh
+
+#----------------------------------------------------------#
+#                    Verifications                         #
+#----------------------------------------------------------#
+
+check_args '1' "$#" 'DOMAIN [--DATABASE_NAME=...] [--DATABASE_USERNAME=...] [--DATABASE_PASSWORD=...]'
+is_format_valid 'domain' 'user'
+is_object_valid 'user' 'USER' "$user"
+is_object_unsuspended 'user' 'USER' "$user"
+
+FROM_DATABASE_NAME=''
+FROM_DATABASE_USERNAME=''
+FROM_DATABASE_PASSWORD=''
+
+FROM_DOMAIN=$domain
+FROM_USER=$user
+
+r=$(/usr/local/vesta/bin/v-get-database-credentials-of-domain $FROM_DOMAIN)
+# echo $r
+eval $r
+
+source /usr/local/vesta/func/handle_parameters.sh
+
+FROM_CONFIG_FILE=$CONFIG_FILE
+FROM_CONFIG_FILE_FULL_PATH=$CONFIG_FILE_FULL_PATH
+if [ ! -f "$FROM_CONFIG_FILE_FULL_PATH" ]; then
+    echo "Error: CONFIG_FILE_FULL_PATH $FROM_CONFIG_FILE_FULL_PATH does not exists"
+    exit 2
+fi
+
+IT_IS_WP=0
+if [ "$CMS_TYPE" = "wordpress" ]; then
+    IT_IS_WP=1
+fi
+
+if [ -z "$FROM_DATABASE_NAME" ]; then
+    FROM_DATABASE_NAME=$DATABASE_NAME
+fi
+if [ -z "$FROM_DATABASE_USERNAME" ]; then
+    FROM_DATABASE_USERNAME=$DATABASE_USERNAME
+fi
+if [ -z "$FROM_DATABASE_PASSWORD" ]; then
+    FROM_DATABASE_PASSWORD=$DATABASE_PASSWORD
+fi
+
+if [ -z "$FROM_DATABASE_NAME" ]; then
+    echo "Error: DATABASE_NAME is empty"
+    exit 3
+fi
+if [ -z "$FROM_DATABASE_USERNAME" ]; then
+    echo "Error: DATABASE_USERNAME is empty"
+    exit 4
+fi
+if [ -z "$FROM_DATABASE_PASSWORD" ]; then
+    echo "Error: DATABASE_PASSWORD is empty"
+    exit 5
+fi
+
+DB_EXISTS=$(check_if_database_exists "$user" "$FROM_DATABASE_NAME")
+if [ "$DB_EXISTS" = "no" ]; then
+    echo "Error: database $FROM_DATABASE_NAME does not exists"
+    exit 6
+fi
+
+# ----------- CHECK -------------
+
+FROM_REPLACE1="http://$FROM_DOMAIN"
+TO_REPLACE1="https://$FROM_DOMAIN"
+FROM_REPLACE2="http://www.$FROM_DOMAIN"
+TO_REPLACE2="https://www.$FROM_DOMAIN"
+
+if [ $IT_IS_WP -eq 0 ]; then
+    if [ ! -f "/root/Search-Replace-DB-master/srdb.cli.php" ]; then
+        echo "Please download https://interconnectit.com/products/search-and-replace-for-wordpress-databases/ and extract to /root/Search-Replace-DB-master/"
+        exit 7
+    fi
+    if [ ! -f "/usr/bin/php7.0" ]; then
+        echo "Please download https://c.myvestacp.com/tools/multi-php-install.sh and install php 7.0"
+        exit 8
+    fi
+else
+    if [ ! -f "/usr/local/bin/wp" ]; then
+        echo "=== Downloading latest wp-cli"
+        wget -nv https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -O /usr/local/bin/wp
+        chmod +x /usr/local/bin/wp
+    fi
+fi
+
+
+# ----------- PRINT -------------
+
+
+echo "==============================================================================="
+echo "FROM_REPLACE1 = $FROM_REPLACE1"
+echo "TO_REPLACE1   = $TO_REPLACE1"
+echo "FROM_REPLACE2 = $FROM_REPLACE2"
+echo "TO_REPLACE2   = $TO_REPLACE2"
+echo "----"
+echo "DOMAIN = $FROM_DOMAIN"
+echo "USER   = $FROM_USER"
+echo "SITE_FOLDER = $SITE_FOLDER"
+echo "IT_IS_WP = $IT_IS_WP"
+echo "CONFIG_FILE_FULL_PATH = $FROM_CONFIG_FILE_FULL_PATH"
+echo "DATABASE_NAME     = $FROM_DATABASE_NAME"
+echo "DATABASE_USERNAME = $FROM_DATABASE_USERNAME"
+echo "DATABASE_PASSWORD = $FROM_DATABASE_PASSWORD"
+echo "==============================================================================="
+read -p "=== Press Enter to continue ==="
+
+
+#----------------------------------------------------------#
+#                       Action                             #
+#----------------------------------------------------------#
+
+if [ ! -f "/home/$user/conf/web/ssl.$domain.ca" ]; then
+    /usr/local/vesta/bin/v-add-letsencrypt-domain "$user" "$domain" "www.$domain" "yes"
+fi
+if [ -f "/home/$user/conf/web/ssl.$domain.ca" ]; then
+    if [ -f "/usr/local/vesta/data/templates/web/nginx/force-https.stpl" ]; then
+        /usr/local/vesta/bin/v-change-web-domain-proxy-tpl  "$user" "$domain" "force-https" "jpeg,jpg,png,gif,bmp,ico,svg,tif,tiff,css,js,ttf,otf,webp,txt,csv,rtf,doc,docx,xls,xlsx,ppt,pptx,odf,odp,ods,odt,pdf,psd,ai,eot,eps,ps,zip,tar,tgz,gz,rar,bz2,7z,aac,m4a,mp3,mp4,ogg,wav,wma,3gp,avi,flv,m4v,mkv,mov,mpeg,mpg,wmv,exe,iso,dmg,swf,woff,woff2" "yes"
+    fi
+else
+    echo "Error: Can not generate SSL."
+    exit 9
+fi
+
+echo "=== Replacing $FROM_REPLACE1 to $TO_REPLACE1 in folder $TO_FOLDER"
+grep -rl "$FROM_DOMAIN" $SITE_FOLDER | xargs sed -i "s#$FROM_REPLACE1#$TO_REPLACE1#g"
+
+echo "=== Replacing $FROM_REPLACE2 to $TO_REPLACE2 in folder $TO_FOLDER"
+grep -rl "$FROM_DOMAIN" $SITE_FOLDER | xargs sed -i "s#$FROM_REPLACE2#$TO_REPLACE2#g"
+
+if [ $IT_IS_WP -eq 0 ]; then
+    echo "=== Replacing $FROM_REPLACE1 to $TO_REPLACE1 in database $FROM_DATABASE_NAME"
+    php7.0 /root/Search-Replace-DB-master/srdb.cli.php -h localhost -n "$FROM_DATABASE_NAME" -u "$FROM_DATABASE_USERNAME" -p "$FROM_DATABASE_PASSWORD" -s "$FROM_REPLACE1" -r "$TO_REPLACE1"
+    echo "=== Replacing $FROM_REPLACE2 to $TO_REPLACE2 in database $FROM_DATABASE_NAME"
+    php7.0 /root/Search-Replace-DB-master/srdb.cli.php -h localhost -n "$FROM_DATABASE_NAME" -u "$FROM_DATABASE_USERNAME" -p "$FROM_DATABASE_PASSWORD" -s "$FROM_REPLACE2" -r "$TO_REPLACE2"
+else
+    cd $SITE_FOLDER
+    echo "=== Replacing $FROM_REPLACE1 to $TO_REPLACE1 in database $FROM_DATABASE_NAME"
+    sudo -H -u$FROM_USER wp search-replace "$FROM_REPLACE1" "$TO_REPLACE1" --precise --all-tables --skip-columns=guid
+    echo "=== Replacing $FROM_REPLACE2 to $TO_REPLACE2 in database $FROM_DATABASE_NAME"
+    sudo -H -u$FROM_USER wp search-replace "$FROM_REPLACE2" "$TO_REPLACE2" --precise --all-tables --skip-columns=guid
+fi
+
+echo "===== DONE ===="
+echo "You can visit $TO_REPLACE1"
+
+#----------------------------------------------------------#
+#                       Vesta                              #
+#----------------------------------------------------------#
+
+# Logging
+log_event "$OK" "$ARGUMENTS"
+
+exit

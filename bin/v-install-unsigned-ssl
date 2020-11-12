@@ -1,0 +1,96 @@
+#!/bin/bash
+
+# info: install unsigned SSL to domain
+# options: DOMAIN [RESTART]
+#
+# The function install unsigned SSL to domain
+
+#----------------------------------------------------------#
+#                    Variable&Function                     #
+#----------------------------------------------------------#
+
+whoami=$(whoami)
+if [ "$whoami" != "root" ]; then
+    echo "You must be root to execute this script"
+    exit 1
+fi
+
+# Argument definition
+if [ $# -lt 1 ]; then
+    echo "usage: v-install-unsigned-ssl DOMAIN [RESTART]"
+    exit 1
+fi
+
+domain=$1
+
+if [ $# -lt 2 ]; then
+    restart='yes'
+else
+    restart=$2
+fi
+
+source /usr/local/vesta/func/main.sh
+source /usr/local/vesta/func/domain.sh
+
+#----------------------------------------------------------#
+#                    Verifications                         #
+#----------------------------------------------------------#
+
+user=$(/usr/local/vesta/bin/v-search-domain-owner $domain)
+
+if [ ! -d "/home/$user" ]; then
+    echo "User doesn't exist";
+    exit 1;
+fi
+
+if [ ! -d "/home/$user/web/$domain/public_html" ]; then
+    echo "Domain doesn't exist";
+    exit 1;
+fi
+
+#----------------------------------------------------------#
+#                       Action                             #
+#----------------------------------------------------------#
+
+email="info@$domain"
+
+TMPLOC="/home/$user/tmp/$domain"
+mkdir $TMPLOC
+
+# Generating SSL certificate
+/usr/local/vesta/bin/v-generate-ssl-cert $domain $email 'US' 'California' 'San Francisco' 'myVesta Control Panel' 'IT' "www.$domain" > $TMPLOC/vst.pem
+
+# Parsing certificate file
+crt_end=$(grep -n "END CERTIFICATE-" $TMPLOC/vst.pem |cut -f 1 -d:)
+key_start=$(grep -n "BEGIN RSA" $TMPLOC/vst.pem |cut -f 1 -d:)
+key_end=$(grep -n  "END RSA" $TMPLOC/vst.pem |cut -f 1 -d:)
+
+# Adding SSL certificate
+cd $TMPLOC
+sed -n "1,${crt_end}p" $TMPLOC/vst.pem > $TMPLOC/$domain.crt
+sed -n "$key_start,${key_end}p" $TMPLOC/vst.pem > $TMPLOC/$domain.key
+chmod 666 $TMPLOC/*
+
+USER_DATA="/usr/local/vesta/data/users/$user";
+get_domain_values 'web'
+
+if [[ $SSL == 'no' ]]
+then
+    #Configure SSL and install the cert
+    /usr/local/vesta/bin/v-add-web-domain-ssl $user $domain $TMPLOC "same" "$restart"
+else
+    #Replace the existing cert with the new one
+    /usr/local/vesta/bin/v-change-web-domain-sslcert $user $domain $TMPLOC "$restart"
+fi
+
+rm -rf $TMPLOC
+
+#----------------------------------------------------------#
+#                       Vesta                              #
+#----------------------------------------------------------#
+
+# Logging
+log_event "$OK" "$ARGUMENTS"
+
+
+exit

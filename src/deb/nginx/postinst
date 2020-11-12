@@ -1,0 +1,20 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" != "configure" ]; then
+    exit 0
+fi
+
+# Touch and set permisions on default log files on installation
+update-rc.d vesta defaults >/dev/null
+invoke-rc.d vesta start || true
+
+# Run triggers only on updates
+if [ ! -e "/usr/local/vesta/data/users/admin" ]; then
+    exit
+fi
+
+echo "=== Restarting vesta ==="
+service vesta stop
+service vesta start

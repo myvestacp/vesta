@@ -1,0 +1,222 @@
+#!/bin/bash
+
+build_date=$(curl -s http://c.myvestacp.com/build_date.txt)
+echo "$build_date" > /usr/local/vesta/build_date.txt
+
+release=$(cat /etc/debian_version | tr "." "\n" | head -n1)
+
+# Run triggers only on updates
+if [ ! -e "/usr/local/vesta/data/users/admin" ]; then
+    version=$(curl -s http://c.myvestacp.com/latest.txt?installed)
+    version=${version:6}
+    echo "=== myVesta $version installed ==="
+    echo "=== myVesta build date: $build_date"
+    echo "$version" > /usr/local/vesta/version.txt
+    exit
+fi
+
+if [ ! -d "/usr/local/vesta/data/upgrades" ]; then
+    mkdir -p /usr/local/vesta/data/upgrades
+fi
+
+# show changelog after update
+echo "1" > /usr/local/vesta/data/upgrades/show_changelog
+chmod a=rw /usr/local/vesta/data/upgrades/show_changelog
+
+# Tuning of php-fpm pool.d config files (perfomances and limits)
+if [ ! -f "/usr/local/vesta/data/upgrades/tune-fpm-config-files-v2" ]; then
+    touch /usr/local/vesta/data/upgrades/tune-fpm-config-files-v2
+    
+    echo "== Tuning of php-fpm pool.d config files (perfomances and limits)"
+    
+    mkdir -p /root/etc-php-backup2
+    cp -r /etc/php/ /root/etc-php-backup2/
+
+    OLDVAL='pm.max_children = 16'
+    NEWVAL='pm.max_children = 8'
+    find /etc/php/*/fpm/pool.d/ -name "*.conf" -type f -exec grep -l "$OLDVAL" {} \; | xargs sed -i "s|$OLDVAL|$NEWVAL|g"
+    find /usr/local/vesta/data/templates/web/apache2/ -type f -name "*.sh" -exec grep -l "$OLDVAL" {} \; | xargs sed -i "s|$OLDVAL|$NEWVAL|g"
+    
+    OLDVAL='request_terminate_timeout = 30s'
+    NEWVAL='request_terminate_timeout = 90s'
+    find /etc/php/*/fpm/pool.d/ -name "*.conf" -type f -exec grep -l "$OLDVAL" {} \; | xargs sed -i "s|$OLDVAL|$NEWVAL|g"
+    find /usr/local/vesta/data/templates/web/apache2/ -type f -name "*.sh" -exec grep -l "$OLDVAL" {} \; | xargs sed -i "s|$OLDVAL|$NEWVAL|g"
+    
+    OLDVAL='php_admin_value\[max_execution_time\] = 20'
+    NEWVAL='php_admin_value\[max_execution_time\] = 30'
+    find /etc/php/*/fpm/pool.d/ -name "*.conf" -type f -exec grep -l "$OLDVAL" {} \; | xargs sed -i "s|$OLDVAL|$NEWVAL|g"
+    find /usr/local/vesta/data/templates/web/apache2/ -type f -name "*.sh" -exec grep -l "$OLDVAL" {} \; | xargs sed -i "s|$OLDVAL|$NEWVAL|g"
+    
+    # restart all php-fpm services
+    systemctl --full --type service --all | grep "php...-fpm" | awk '{print $1}' | xargs systemctl restart
+    echo "== Done"
+fi
+
+if [ ! -f "/usr/local/vesta/data/upgrades/allow-backup-anytime" ]; then
+    touch /usr/local/vesta/data/upgrades/allow-backup-anytime
+    check_grep=$(grep -c 'ALLOW_BACKUP_ANYTIME' /usr/local/vesta/conf/vesta.conf)
+    if [ "$check_grep" -eq 0 ]; then
+        echo "" >> /usr/local/vesta/conf/vesta.conf
+        echo "ALLOW_BACKUP_ANYTIME='yes'" >> /usr/local/vesta/conf/vesta.conf
+    fi
+fi
+
+if [ ! -f "/usr/local/vesta/data/upgrades/fix-sudoers" ]; then
+    touch /usr/local/vesta/data/upgrades/fix-sudoers
+    # sudoers fix
+    if [ -e "/etc/sudoers.d/admin" ]; then
+        sed -i "s/admin.*ALL=(ALL).*/# sudo is limited to vesta scripts/" \
+            /etc/sudoers.d/admin
+    fi
+fi
+
+check_grep=$(grep -c 'vesta.hostingpanel.dev' /etc/apt/sources.list.d/vesta.list)
+if [ "$check_grep" -eq 1 ]; then
+    wget -O - http://apt.myvestacp.com/deb_signing.key | sudo apt-key add -
+    codename="$(cat /etc/os-release |grep VERSION= |cut -f 2 -d \(|cut -f 1 -d \))"
+    echo "deb http://apt.myvestacp.com/$codename/ $codename vesta" > /etc/apt/sources.list.d/vesta.list
+fi
+
+if [ -f "/var/spool/cron/crontabs/root" ]; then
+    check_cron=$(grep -c '6 sudo find /home/' /var/spool/cron/crontabs/root)
+else
+    check_cron=0
+fi
+if [ "$check_cron" -eq 0 ]; then
+    crontab -l | { cat; echo "10 2 * * 6 sudo find /home/*/tmp/ -type f -mtime +5 -exec rm {} \;"; } | crontab -
+fi
+
+# make sure clamav-daemon.service has mkdir fix
+if [ -f "/lib/systemd/system/clamav-daemon.service" ]; then
+    check_grep=$(grep -c 'mkdir' /lib/systemd/system/clamav-daemon.service)
+    if [ "$check_grep" -eq 0 ]; then
+        echo "=== patching clamav-daemon.service"
+        exec_pre1='ExecStartPre=-/bin/mkdir -p /var/run/clamav'
+        exec_pre2='ExecStartPre=-/bin/chown -R clamav:clamav /var/run/clamav'
+        sed -i "s|\[Service\]|[Service]\n$exec_pre1\n$exec_pre2|g" /lib/systemd/system/clamav-daemon.service
+        systemctl daemon-reload
+        systemctl restart clamav-daemon
+        systemctl restart clamav-freshclam
+    fi
+fi
+
+# reverting to default clamd sock
+if [ ! -f "/usr/local/vesta/data/upgrades/change-clamav-socket-v3" ]; then
+    touch /usr/local/vesta/data/upgrades/change-clamav-socket-v3
+    if [ -f "/etc/clamav/clamd.conf" ]; then
+        sed -i "s#/var/lib/clamav/clamd.sock#/var/run/clamav/clamd.ctl#g" /etc/clamav/clamd.conf
+        if [ -f "/etc/exim4/exim4.conf.template" ]; then
+            sed -i "s#/var/lib/clamav/clamd.sock#/var/run/clamav/clamd.ctl#g" /etc/exim4/exim4.conf.template
+        fi
+        if [ -f "/lib/systemd/system/clamav-daemon.socket" ]; then
+            sed -i "s#/var/lib/clamav/clamd.sock#/run/clamav/clamd.ctl#g" /lib/systemd/system/clamav-daemon.socket
+        fi
+        systemctl daemon-reload
+        systemctl restart clamav-daemon
+        systemctl restart clamav-freshclam
+        if [ -f "/etc/exim4/exim4.conf.template" ]; then
+            systemctl restart exim4
+        fi
+    fi
+fi
+
+# reverting to default clamd sock
+if [ ! -f "/usr/local/vesta/data/upgrades/change-clamav-socket-v4" ]; then
+    touch /usr/local/vesta/data/upgrades/change-clamav-socket-v4
+    if [ -f "/etc/clamav/clamd.conf" ]; then
+        check_grep=$(grep -c '/var/lib/clamav/clamd.ctl' /etc/clamav/clamd.conf)
+        if [ "$check_grep" -eq 1 ]; then
+            sed -i "s#/var/lib/clamav/clamd.ctl#/var/run/clamav/clamd.ctl#g" /etc/clamav/clamd.conf
+            systemctl restart clamav-daemon
+        fi
+    fi
+fi
+
+# Making sure mpm_event will stay
+if [ ! -f "/usr/local/vesta/data/upgrades/keeping-mpm-event" ]; then
+    touch /usr/local/vesta/data/upgrades/keeping-mpm-event
+    echo "=== scheduling keeping-mpm-event check script"
+    echo "bash /usr/local/vesta/upd/keep_mpm_event.sh 'background' >> /usr/local/vesta/data/upgrades/keeping-mpm-event.log 2>&1" >> /usr/local/vesta/data/queue/restart.pipe
+    /usr/local/vesta/bin/v-add-cron-restart-job > /dev/null 2>&1
+fi
+
+# Fixing ssl directive in nginx templates
+if [ "$release" -eq 9 ] || [ "$release" -eq 10 ]; then
+    if [ ! -f "/usr/local/vesta/data/upgrades/fix_ssl_directive_in_templates" ]; then
+        touch /usr/local/vesta/data/upgrades/fix_ssl_directive_in_templates
+        echo "=== Fixing ssl directive in nginx templates"
+        bash /usr/local/vesta/upd/fix_ssl_directive_in_templates.sh
+    fi
+fi
+
+# Block executable files inside zip/rar/tar archives in ClamAV
+if [ ! -f "/usr/local/vesta/data/upgrades/clamav_block_exe_in_archives" ]; then
+    touch /usr/local/vesta/data/upgrades/clamav_block_exe_in_archives
+    if [ -f "/etc/exim4/exim4.conf.template" ]; then
+        check_grep=$(grep -c '#CLAMD' /etc/exim4/exim4.conf.template)
+        if [ "$check_grep" -eq 0 ]; then
+            folder="/var/lib/clamav"
+            if [ -d "$folder" ]; then
+                echo "=== Blocking executable files inside zip/rar/tar archives in ClamAV"
+                wget -nv -O $folder/foxhole_all.cdb http://c.myvestacp.com/tools/clamav/foxhole_all.cdb
+                chown clamav:clamav $folder/foxhole_all.cdb
+                service clamav-daemon restart
+            fi
+        fi
+    fi
+fi
+
+# Clearing letsencrypt pipe
+if [ ! -f "/usr/local/vesta/data/upgrades/clearing-letsencrypt-pipe" ]; then
+    touch /usr/local/vesta/data/upgrades/clearing-letsencrypt-pipe
+    if [ -f "/usr/local/vesta/data/queue/letsencrypt.pipe" ]; then
+        truncate -s 0 /usr/local/vesta/data/queue/letsencrypt.pipe
+    fi
+fi
+
+# Deleting accidentally created W3TC.json in root folder of project
+if [ -f "/usr/local/vesta/W3TC.json" ]; then
+    rm /usr/local/vesta/W3TC.json
+fi
+# Deleting renamed command
+if [ -f "/usr/local/vesta/bin/v-replace-in-file" ]; then
+    rm /usr/local/vesta/bin/v-replace-in-file
+fi
+
+# Limit max recipients per email to 15, in order to prevent mass spamming
+if [ ! -f "/usr/local/vesta/data/upgrades/limit_max_recipients" ]; then
+    touch /usr/local/vesta/data/upgrades/limit_max_recipients
+    if [ -f "/etc/exim4/exim4.conf.template" ]; then
+        check_grep=$(grep -c 'recipients_max' /etc/exim4/exim4.conf.template)
+        if [ "$check_grep" -eq 0 ]; then
+            echo "=== Limit max recipients per email to 15, in order to prevent mass spamming"
+            FIND="acl_smtp_mime = acl_check_mime"
+            REPLACE="recipients_max = 15\nrecipients_max_reject = true"
+            sed -i "s#$FIND#$FIND\n\n$REPLACE#g" /etc/exim4/exim4.conf.template
+            systemctl restart exim4
+        fi
+    fi
+fi
+
+# Fixing Roundcube to send via authenticated SMTP user instead via php
+if [ ! -f "/usr/local/vesta/data/upgrades/roundcube_smtp_auth" ]; then
+    touch /usr/local/vesta/data/upgrades/roundcube_smtp_auth
+    if [ -f "/etc/roundcube/defaults.inc.php" ]; then
+        echo "=== Fixing Roundcube to send via authenticated SMTP user instead via php"
+        sed -i "s#^\$config\['smtp_user'\].*#\$config\['smtp_user'\] = '%u';#g" /etc/roundcube/defaults.inc.php
+        sed -i "s#^\$config\['smtp_pass'\].*#\$config\['smtp_pass'\] = '%p';#g" /etc/roundcube/defaults.inc.php
+    fi
+fi
+
+# Run custom triggers
+if [ -x "/root/vesta-patch.sh" ]; then
+    /root/vesta-patch.sh
+fi
+
+version=$(curl -s http://c.myvestacp.com/latest.txt?updated)
+version=${version:6}
+echo "=== myVesta $version updated ==="
+echo "=== myVesta build date: $build_date"
+echo "$version" > /usr/local/vesta/version.txt
+
+exit 0
